@@ -1,3 +1,4 @@
+require 'bundler/setup'
 require 'link_checker/celluloid'
 require 'link_checker/super_slow_checksummer'
 

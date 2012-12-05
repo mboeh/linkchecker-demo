@@ -1,3 +1,4 @@
+require 'bundler/setup'
 require 'link_checker/celluloid'
 
 source_file = ARGV[0]
