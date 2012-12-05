@@ -5,12 +5,29 @@ require 'date'
 
 module LinkChecker
  
+  class << self
+    attr_accessor :logger
+  end
+
   module Conversions
     
     def Time(value)
       return if value.nil?
       return value.to_time if value.respond_to?(:to_time)
       return DateTime.parse(value).to_time
+    end
+
+  end
+
+  module Common
+    attr_accessor :logger
+
+    def logger
+      @logger ||= LinkChecker.logger
+    end
+
+    def log(msg)
+      logger.info("[#{self.class.name}:#{object_id}] #{msg}") if logger
     end
 
   end
@@ -56,12 +73,15 @@ module LinkChecker
 
   class Process
     attr_accessor :source, :updater, :store
+    
+    include Common
 
-    def initialize(keyw = {})
+    def initialize(keyw = {}, &blk)
       self.source  = keyw[:source]
       self.updater = keyw[:updater]
       self.store   = keyw[:store]
-      yield self if block_given?
+      
+      instance_eval &blk if block_given? 
     end
 
     def execute
@@ -75,13 +95,17 @@ module LinkChecker
   class Updater
     attr_accessor :prechecker, :checksum_fetcher
 
+    include Common
+
     def initialize(keyw = {})
       self.prechecker       = keyw.fetch :prechecker
       self.checksum_fetcher = keyw.fetch :checksum_fetcher
+
+      @jobs = []
     end
 
     def update(link, keyw = {})
-      prechecker.check link, fresh_to: checksum_fetcher, to: keyw[:to]
+      prechecker.check(link, fresh_to: checksum_fetcher, to: keyw[:to])
     end
 
   end
@@ -108,10 +132,12 @@ module LinkChecker
 
   class Prechecker
     include HTTPInteraction
+    include Common
 
     def check(link, keyw = {})
+      log "checking #{link}"
       if new_link = check_link(link)
-        keyw[:fresh_to].fetch new_link, to: keyw[:to]
+        keyw[:fresh_to].fetch(new_link, to: keyw[:to])
       else
         keyw[:to] << link
       end
@@ -133,6 +159,7 @@ module LinkChecker
 
   class ChecksumFetcher
     include HTTPInteraction
+    include Common
 
     attr_accessor :checksummer
 
@@ -142,10 +169,28 @@ module LinkChecker
 
     def fetch(link, keyw = {})
       response = http_session(link.url) do |session|
+        log "requesting #{link.url}"
         session.request get_request(link.url)
       end
 
-      keyw[:to] << link.with_checksum(checksummer.(response.body))
+      checksummer.checksum(link, response.body, to: keyw[:to])
+    end
+
+  end
+
+  class Checksummer 
+    include Common
+
+    attr_accessor :checksum_method
+
+    def initialize(checksum_method, keyw = {})
+      self.checksum_method = checksum_method
+    end
+
+    def checksum(link, content, keyw = {})
+      log "checksumming #{link}"
+
+      keyw[:to] << link.with_checksum(checksum_method.(content))
     end
 
   end

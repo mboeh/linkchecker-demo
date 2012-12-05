@@ -6,12 +6,29 @@ require 'celluloid'
 
 module LinkChecker
  
+  class << self
+    attr_accessor :logger
+  end
+
   module Conversions
     
     def Time(value)
       return if value.nil?
       return value.to_time if value.respond_to?(:to_time)
       return DateTime.parse(value).to_time
+    end
+
+  end
+
+  module Common
+    attr_accessor :logger
+
+    def logger
+      @logger ||= LinkChecker.logger
+    end
+
+    def log(msg)
+      logger.info("[#{self.class.name}:#{object_id}] #{msg}") if logger
     end
 
   end
@@ -57,12 +74,15 @@ module LinkChecker
 
   class Process
     attr_accessor :source, :updater, :store
+    
     include Celluloid
+    include Common
 
     def initialize(keyw = {}, &blk)
       self.source  = keyw[:source]
       self.updater = keyw[:updater]
       self.store   = keyw[:store]
+      
       instance_eval &blk if block_given? 
     end
 
@@ -70,28 +90,57 @@ module LinkChecker
       source.each do |link|
         updater.update link, to: store
       end
-      updater.wait
     end
 
   end
 
+  class JobSupervisor
+    include Celluloid
+    
+    def initialize(source, destination)
+      @urls = Set.new
+      @source = source
+      @destination = destination
+    end
+
+    def each(&blk)
+      @source.each do |link|
+        register link
+        yield link
+      end
+    end
+
+    def register(link)
+      @urls << link.url
+    end
+
+    def <<(link)
+      @urls.delete link.url
+      @destination << link
+      notify if @urls.empty?
+    end
+
+    def notify
+      signal :done
+    end
+      
+  end
+      
   class Updater
     attr_accessor :prechecker, :checksum_fetcher
+
     include Celluloid
+    include Common
 
     def initialize(keyw = {})
       self.prechecker       = keyw.fetch :prechecker
       self.checksum_fetcher = keyw.fetch :checksum_fetcher
+
       @jobs = []
     end
 
     def update(link, keyw = {})
-      @jobs << prechecker.future(:check, link, fresh_to: checksum_fetcher, to: keyw[:to])
-    end
-
-    def wait
-      @jobs.each(&:value)
-      nil
+      prechecker.check(link, fresh_to: checksum_fetcher, to: keyw[:to])
     end
 
   end
@@ -119,8 +168,10 @@ module LinkChecker
   class Prechecker
     include HTTPInteraction
     include Celluloid
+    include Common
 
     def check(link, keyw = {})
+      log "checking #{link}"
       if new_link = check_link(link)
         keyw[:fresh_to].fetch(new_link, to: keyw[:to])
       else
@@ -145,6 +196,7 @@ module LinkChecker
   class ChecksumFetcher
     include HTTPInteraction
     include Celluloid
+    include Common
 
     attr_accessor :checksummer
 
@@ -154,10 +206,29 @@ module LinkChecker
 
     def fetch(link, keyw = {})
       response = http_session(link.url) do |session|
+        log "requesting #{link.url}"
         session.request get_request(link.url)
       end
 
-      keyw[:to] << link.with_checksum(checksummer.(response.body))
+      checksummer.checksum(link, response.body, to: keyw[:to])
+    end
+
+  end
+
+  class Checksummer 
+    include Celluloid
+    include Common
+
+    attr_accessor :checksum_method
+
+    def initialize(checksum_method, keyw = {})
+      self.checksum_method = checksum_method
+    end
+
+    def checksum(link, content, keyw = {})
+      log "checksumming #{link}"
+
+      keyw[:to] << link.with_checksum(checksum_method.(content))
     end
 
   end

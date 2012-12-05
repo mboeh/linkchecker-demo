@@ -12,9 +12,9 @@ results = []
 LinkChecker.logger = Celluloid.logger
 
 LinkChecker::Process.new do |process|
-  prechecker  = LinkChecker::Prechecker.new_link
-  checksummer = LinkChecker::Checksummer.new_link(Digest::MD5.method(:hexdigest))
-  fetcher     = LinkChecker::ChecksumFetcher.new_link(checksummer: checksummer)
+  prechecker  = LinkChecker::Prechecker.new_link.async
+  checksummer = LinkChecker::Checksummer.new_link(Digest::MD5.method(:hexdigest)).async
+  fetcher     = LinkChecker::ChecksumFetcher.new_link(checksummer: checksummer).async
                  
   process.source  = urls
   process.updater = LinkChecker::Updater.new_link(
